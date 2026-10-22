@@ -114,7 +114,7 @@ impl XState {
     fn xdnd_target_of(&self, window: x::Window) -> Option<Target> {
         let proxy = self
             .window_property(window, self.atoms.xdnd_proxy, x::ATOM_WINDOW)
-            .map(|w| <x::Window as xcb::XidNew>::new(w))
+            .map(<x::Window as xcb::XidNew>::new)
             .filter(|w| !w.is_none());
         let version =
             self.window_property(proxy.unwrap_or(window), self.atoms.xdnd_aware, x::ATOM_ATOM)?;
