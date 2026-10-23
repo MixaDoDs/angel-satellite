@@ -1247,6 +1247,47 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
         }
     }
 
+    pub fn minimize_window(&mut self, window: x::Window) {
+        let Some(data) = self
+            .windows
+            .get(&window)
+            .copied()
+            .and_then(|id| self.world.entity(id).ok())
+        else {
+            warn!("Tried to minimize unknown window {window:?}");
+            return;
+        };
+        let Some(role) = data.get::<&SurfaceRole>() else {
+            return;
+        };
+        if let SurfaceRole::Toplevel(Some(toplevel)) = &*role {
+            toplevel.toplevel.set_minimized();
+        }
+    }
+
+    /// xdg-shell never says back whether a window is maximized but in a configure, so a toggle
+    /// asks to maximize: the compositor knows better.
+    pub fn set_maximized(&mut self, window: x::Window, state: super::xstate::SetState) {
+        let Some(data) = self
+            .windows
+            .get(&window)
+            .copied()
+            .and_then(|id| self.world.entity(id).ok())
+        else {
+            warn!("Tried to maximize unknown window {window:?}");
+            return;
+        };
+        let Some(role) = data.get::<&SurfaceRole>() else {
+            return;
+        };
+        if let SurfaceRole::Toplevel(Some(toplevel)) = &*role {
+            match state {
+                super::xstate::SetState::Remove => toplevel.toplevel.unset_maximized(),
+                _ => toplevel.toplevel.set_maximized(),
+            }
+        }
+    }
+
     pub fn set_transient_for(&mut self, window: x::Window, parent: x::Window) {
         let Some(mut win) = self
             .windows

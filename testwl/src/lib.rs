@@ -159,6 +159,9 @@ pub struct Toplevel {
     pub max_size: Option<Vec2>,
     pub states: Vec<xdg_toplevel::State>,
     pub closed: bool,
+    /// set_minimized requests so far; set_maximized minus unset_maximized
+    pub minimize_requests: u32,
+    pub maximized: bool,
     pub title: Option<String>,
     pub app_id: Option<String>,
     pub decoration: Option<(
@@ -1667,6 +1670,20 @@ impl Dispatch<XdgToplevel, SurfaceId> for State {
                 let states = toplevel.states.clone();
                 state.configure_toplevel(*surface_id, 100, 100, states);
             }
+            xdg_toplevel::Request::SetMinimized => {
+                let data = state.surfaces.get_mut(surface_id).unwrap();
+                let Some(SurfaceRole::Toplevel(toplevel)) = &mut data.role else {
+                    unreachable!();
+                };
+                toplevel.minimize_requests += 1;
+            }
+            xdg_toplevel::Request::SetMaximized | xdg_toplevel::Request::UnsetMaximized => {
+                let data = state.surfaces.get_mut(surface_id).unwrap();
+                let Some(SurfaceRole::Toplevel(toplevel)) = &mut data.role else {
+                    unreachable!();
+                };
+                toplevel.maximized = matches!(request, xdg_toplevel::Request::SetMaximized);
+            }
             xdg_toplevel::Request::Destroy => {}
             xdg_toplevel::Request::SetTitle { title } => {
                 let data = state.surfaces.get_mut(surface_id).unwrap();
@@ -1732,6 +1749,8 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     max_size: None,
                     states: Vec::new(),
                     closed: false,
+                    minimize_requests: 0,
+                    maximized: false,
                     title: None,
                     app_id: None,
                     decoration: None,

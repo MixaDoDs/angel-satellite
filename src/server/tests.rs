@@ -1334,6 +1334,28 @@ fn fullscreen() {
     );
 }
 
+// what Steam's own minimize and maximize buttons send
+#[test]
+fn minimize_and_maximize_from_x11() {
+    let (mut f, comp) = TestFixture::new_with_compositor();
+    let win = Window::new(1);
+    let (_, id) = f.create_toplevel(&comp, win);
+
+    f.satellite.minimize_window(win);
+    f.satellite.set_maximized(win, SetState::Add);
+    f.run();
+    f.run();
+    let data = f.testwl.get_surface_data(id).unwrap();
+    assert_eq!(data.toplevel().minimize_requests, 1);
+    assert!(data.toplevel().maximized);
+
+    f.satellite.set_maximized(win, SetState::Remove);
+    f.run();
+    f.run();
+    let data = f.testwl.get_surface_data(id).unwrap();
+    assert!(!data.toplevel().maximized);
+}
+
 #[test]
 fn window_title_and_class() {
     let (mut f, comp) = TestFixture::new_with_compositor();

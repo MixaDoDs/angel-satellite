@@ -297,6 +297,9 @@ impl XState {
                 self.atoms.motif_wm_hints,
                 self.atoms.net_wm_state,
                 self.atoms.wm_fullscreen,
+                self.atoms.wm_hidden,
+                self.atoms.wm_maximized_vert,
+                self.atoms.wm_maximized_horz,
                 self.atoms.moveresize,
             ],
         );
@@ -562,8 +565,26 @@ impl XState {
                         x if x == self.atoms.wm_fullscreen => {
                             server_state.set_fullscreen(e.window(), action);
                         }
+                        // A window can't be shown hidden: only asking to hide does something.
+                        x if x == self.atoms.wm_hidden && !matches!(action, SetState::Remove) => {
+                            server_state.minimize_window(e.window());
+                        }
                         _ => {}
                     }
+                }
+                // Both halves come in one message; one maximize for them.
+                let maximized = [self.atoms.wm_maximized_vert, self.atoms.wm_maximized_horz];
+                if maximized.contains(&prop1) || maximized.contains(&prop2) {
+                    server_state.set_maximized(e.window(), action);
+                }
+            }
+            // ICCCM 4.1.4: XIconifyWindow, what Steam's and other CSD minimize buttons send.
+            x if x == self.atoms.wm_change_state => {
+                let x::ClientMessageData::Data32(data) = e.data() else {
+                    unreachable!();
+                };
+                if data[0] == WmState::Iconic as u32 {
+                    server_state.minimize_window(e.window());
                 }
             }
             x if x == self.atoms.active_win => {
@@ -911,6 +932,10 @@ xcb::atoms_struct! {
         wm_pid => b"_NET_WM_PID" only_if_exists = false,
         net_wm_state => b"_NET_WM_STATE" only_if_exists = false,
         wm_fullscreen => b"_NET_WM_STATE_FULLSCREEN" only_if_exists = false,
+        wm_hidden => b"_NET_WM_STATE_HIDDEN" only_if_exists = false,
+        wm_maximized_vert => b"_NET_WM_STATE_MAXIMIZED_VERT" only_if_exists = false,
+        wm_maximized_horz => b"_NET_WM_STATE_MAXIMIZED_HORZ" only_if_exists = false,
+        wm_change_state => b"WM_CHANGE_STATE" only_if_exists = false,
         active_win => b"_NET_ACTIVE_WINDOW" only_if_exists = false,
         client_list => b"_NET_CLIENT_LIST" only_if_exists = false,
         supported => b"_NET_SUPPORTED" only_if_exists = false,
