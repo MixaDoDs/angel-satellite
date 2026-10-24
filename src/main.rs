@@ -250,7 +250,9 @@ fn init_logger(integrated: bool) {
         match syslog::unix(syslog::Formatter3164::default()) {
             Ok(syslog) => {
                 log::set_boxed_logger(Box::new(syslog::BasicLogger::new(syslog))).unwrap();
-                log::set_max_level(log::LevelFilter::Debug);
+                // Info, not Debug: per-frame "Reconfiguring"/"viewport" lines were ~90% of the
+                // journal and pushed system logs (kernel, suspend) out of a 50 MB journal.
+                log::set_max_level(log::LevelFilter::Info);
                 std::panic::set_hook(Box::new(|info| {
                     let thread = std::thread::current();
                     let name = thread.name().unwrap_or("<unnamed");
