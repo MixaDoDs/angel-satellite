@@ -360,6 +360,13 @@ impl SurfaceEvents {
             } else {
                 window_data.attrs.dims.height
             };
+            // angel-satellite: a game that switched the resolution stays at it when fullscreen
+            window_data.wl_size = Some((width, height));
+            let fullscreen = matches!(role, SurfaceRole::Toplevel(Some(t)) if t.fullscreen);
+            let (width, height) = window_data
+                .emulated_size()
+                .filter(|_| fullscreen)
+                .unwrap_or((width, height));
             debug!(
                 "configuring {} ({window:?}): {x}x{y}, {width}x{height}",
                 data.get::<&WlSurface>().unwrap().id(),
@@ -507,6 +514,16 @@ impl SurfaceEvents {
     }
 }
 
+/// angel-satellite: the viewport Xwayland itself asked for on a surface. Xwayland uses it to
+/// emulate a resolution change: a game's window at the emulated size is stretched to the whole
+/// monitor (source = the window, destination = the monitor, both in X pixels). Satellite keeps
+/// its own viewport on the host surface, so Xwayland's is folded into it.
+#[derive(Default, Debug)]
+pub(super) struct XwlViewport {
+    pub source: Option<[f64; 4]>,
+    pub destination: Option<(i32, i32)>,
+}
+
 pub(super) fn update_surface_viewport(
     world: &World,
     mut surface_query: hecs::QueryOne<(
@@ -515,16 +532,25 @@ pub(super) fn update_surface_viewport(
         &SurfaceScaleFactor,
         Option<&mut SurfaceRole>,
         &WlSurface,
+        Option<&XwlViewport>,
     )>,
 ) {
-    let (window_data, viewport, scale_factor, mut role, surface) = surface_query.get().unwrap();
+    let (window_data, viewport, scale_factor, mut role, surface, xwl) =
+        surface_query.get().unwrap();
     let dims = &window_data.attrs.dims;
     let size_hints = &window_data.attrs.size_hints;
 
-    let width = (dims.width as f64 / scale_factor.0).ceil() as i32;
-    let height = (dims.height as f64 / scale_factor.0).ceil() as i32;
+    let (x_width, x_height) = xwl
+        .and_then(|v| v.destination)
+        .unwrap_or((dims.width as i32, dims.height as i32));
+    let width = (x_width as f64 / scale_factor.0).ceil() as i32;
+    let height = (x_height as f64 / scale_factor.0).ceil() as i32;
     if width > 0 && height > 0 {
         viewport.set_destination(width, height);
+    }
+    if let Some(xwl) = xwl {
+        let [x, y, w, h] = xwl.source.unwrap_or([-1.0; 4]);
+        viewport.set_source(x, y, w, h);
     }
 
     let mut toplevel_data = match &mut role {
@@ -668,10 +694,17 @@ impl Event for client::wl_pointer::Event {
                 let mut query = surface_entity.and_then(|e| {
                     state
                         .world
-                        .query_one::<(&WlSurface, &SurfaceRole, &SurfaceScaleFactor, &x::Window)>(e)
+                        .query_one::<(
+                            &WlSurface,
+                            &SurfaceRole,
+                            &SurfaceScaleFactor,
+                            &x::Window,
+                            Option<&XwlViewport>,
+                        )>(e)
                         .ok()
                 });
-                let Some((surface, role, scale, window)) = query.as_mut().and_then(|q| q.get())
+                let Some((surface, role, scale, window, xwl)) =
+                    query.as_mut().and_then(|q| q.get())
                 else {
                     if let Some(&DecorationMarker { parent }) = surface.data() {
                         drop(query);
@@ -689,10 +722,23 @@ impl Event for client::wl_pointer::Event {
                 let server = state.world.get::<&WlPointer>(target).unwrap();
                 cmd.insert(target, (*scale,));
 
+                // angel-satellite: Xwayland scales the motion over its emulated-resolution viewport,
+                // but not the enter position; without this the cursor lands off until it moves
+                let (emu_x, emu_y) = match xwl.map(|v| (v.source, v.destination)) {
+                    Some((Some([_, _, sw, sh]), Some((dw, dh)))) => {
+                        (sw / dw as f64, sh / dh as f64)
+                    }
+                    _ => (1.0, 1.0),
+                };
                 let surface_is_popup = matches!(role, SurfaceRole::Popup(_));
                 let mut do_enter = || {
                     debug!("pointer entering {} ({serial} {})", surface.id(), scale.0);
-                    server.enter(serial, surface, surface_x * scale.0, surface_y * scale.0);
+                    server.enter(
+                        serial,
+                        surface,
+                        surface_x * scale.0 * emu_x,
+                        surface_y * scale.0 * emu_y,
+                    );
                     connection.raise_to_top(*window);
                     if !surface_is_popup {
                         state.last_hovered = Some(*window);

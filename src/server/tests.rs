@@ -28,6 +28,7 @@ use wayland_client::{
     },
 };
 use wayland_protocols::wp::linux_drm_syncobj::v1::client::wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1;
+use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use wayland_protocols::{
     wp::{
@@ -1167,7 +1168,8 @@ fn pass_through_globals() {
         ZwpPointerConstraintsV1,
         XwaylandShellV1,
         ZwpTabletManagerV2,
-        WpLinuxDrmSyncobjManagerV1
+        WpLinuxDrmSyncobjManagerV1,
+        WpViewporter
     }
 
     let mut globals = SupportedGlobals::default();

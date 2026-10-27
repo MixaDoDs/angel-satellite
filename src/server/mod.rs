@@ -51,7 +51,10 @@ use wayland_protocols::{
             zwp_tablet_pad_v2, zwp_tablet_seat_v2, zwp_tablet_tool_v2, zwp_tablet_v2,
         },
         tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2,
-        viewporter::client::wp_viewporter::WpViewporter,
+        viewporter::{
+            client::wp_viewporter::WpViewporter,
+            server::wp_viewporter::WpViewporter as WpViewporterServer,
+        },
     },
     xdg::{
         shell::client::{
@@ -133,9 +136,25 @@ struct WindowData {
     attrs: WindowAttributes,
     output_offset: WindowOutputOffset,
     activation_token: Option<String>,
+    /// angel-satellite: monitors where Xwayland emulates another resolution for the window's
+    /// client (`_XWAYLAND_RANDR_EMU_MONITOR_RECTS`: x, y, width, height).
+    emu_rects: Vec<[i32; 4]>,
+    /// The size the compositor last asked for, before `emulated_size` took over.
+    wl_size: Option<(u16, u16)>,
 }
 
 impl WindowData {
+    /// angel-satellite: a game that switched the resolution gets its fullscreen window at the
+    /// emulated size, not the monitor's, as with a real X11 window manager (mutter, KWin).
+    /// Xwayland then sees the window matching the mode and stretches it to the monitor through
+    /// its viewport (`XwlViewport`), pointer coordinates included.
+    fn emulated_size(&self) -> Option<(u16, u16)> {
+        self.emu_rects
+            .iter()
+            .find(|r| r[0] == self.output_offset.x && r[1] == self.output_offset.y)
+            .map(|r| (r[2] as u16, r[3] as u16))
+    }
+
     fn new(override_redirect: bool, dims: WindowDims, activation_token: Option<String>) -> Self {
         Self {
             mapped: false,
@@ -147,6 +166,8 @@ impl WindowData {
             },
             output_offset: WindowOutputOffset::default(),
             activation_token,
+            emu_rects: Vec::new(),
+            wl_size: None,
         }
     }
 
@@ -559,6 +580,8 @@ impl<S: X11Selection> ServerState<NoConnection<S>> {
         let selection_states = selection::SelectionStates::new(&global_list, &qh);
 
         dh.create_global::<InnerServerState<S>, XwaylandShellV1, _>(1, ());
+        // angel-satellite: lets Xwayland emulate resolution changes (see `XwlViewport`)
+        dh.create_global::<InnerServerState<S>, WpViewporterServer, _>(1, ());
 
         let mut globals_map = HashMap::new();
         global_list
@@ -1032,6 +1055,50 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             }
             win.attrs.size_hints = Some(hints);
         }
+    }
+
+    /// angel-satellite: see `WindowData::emulated_size`. A fullscreen window is resized at once,
+    /// to the emulated size or back to the compositor's.
+    pub fn set_emu_rects(&mut self, window: x::Window, rects: Vec<[i32; 4]>) {
+        let Some(entity) = self.windows.get(&window).copied() else {
+            debug!("not setting emulated resolution for unknown window {window:?}");
+            return;
+        };
+        let Ok(data) = self.world.entity(entity) else {
+            return;
+        };
+        let mut win = data.get::<&mut WindowData>().unwrap();
+        if win.emu_rects == rects {
+            return;
+        }
+        debug!("{window:?} emulated resolution: {rects:?}");
+        win.emu_rects = rects;
+
+        let fullscreen = data
+            .get::<&SurfaceRole>()
+            .is_some_and(|r| matches!(&*r, SurfaceRole::Toplevel(Some(t)) if t.fullscreen));
+        if !fullscreen {
+            return;
+        }
+        let Some((width, height)) = win.emulated_size().or(win.wl_size) else {
+            return;
+        };
+        win.attrs.dims.width = width;
+        win.attrs.dims.height = height;
+        let dims = win.attrs.dims;
+        drop(win);
+        self.world
+            .insert_one(
+                entity,
+                PendingSurfaceState {
+                    x: dims.x as _,
+                    y: dims.y as _,
+                    width: width as _,
+                    height: height as _,
+                },
+            )
+            .unwrap();
+        update_surface_viewport(&self.world, self.world.query_one(entity).unwrap());
     }
 
     pub fn set_win_decorations(&mut self, window: x::Window, decorations: Decorations) {

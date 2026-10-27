@@ -30,7 +30,13 @@ use wayland_protocols::{
             server::zwp_relative_pointer_v1::ZwpRelativePointerV1 as RelativePointerServer,
         },
         tablet::zv2::{client as c_tablet, server as s_tablet},
-        viewporter::client::wp_viewport::WpViewport,
+        viewporter::{
+            client::wp_viewport::WpViewport,
+            server::{
+                wp_viewport::{self as s_viewport, WpViewport as ViewportServer},
+                wp_viewporter::{self as s_viewporter, WpViewporter as ViewporterServer},
+            },
+        },
     },
     xdg::xdg_output::zv1::{
         client::zxdg_output_manager_v1::ZxdgOutputManagerV1 as OutputManClient,
@@ -1589,6 +1595,95 @@ impl<S: X11Selection> Dispatch<XwaylandSurfaceV1, Entity> for InnerServerState<S
             }
             Request::Destroy => {}
             _ => unreachable!(),
+        }
+    }
+}
+
+// angel-satellite: Xwayland's own viewports, folded into satellite's (see `XwlViewport`)
+impl<S: X11Selection> GlobalDispatch<ViewporterServer, ()> for InnerServerState<S> {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &wayland_server::Client,
+        resource: wayland_server::New<ViewporterServer>,
+        _: &(),
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl<S: X11Selection> Dispatch<ViewporterServer, ()> for InnerServerState<S> {
+    fn request(
+        state: &mut Self,
+        _: &wayland_server::Client,
+        _: &ViewporterServer,
+        request: <ViewporterServer as Resource>::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        match request {
+            s_viewporter::Request::GetViewport { id, surface } => {
+                let entity: Entity = surface.data().copied().unwrap();
+                state
+                    .world
+                    .insert_one(entity, XwlViewport::default())
+                    .unwrap();
+                data_init.init(id, entity);
+            }
+            s_viewporter::Request::Destroy => {}
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl<S: X11Selection> Dispatch<ViewportServer, Entity> for InnerServerState<S> {
+    fn request(
+        state: &mut Self,
+        _: &wayland_server::Client,
+        _: &ViewportServer,
+        request: <ViewportServer as Resource>::Request,
+        entity: &Entity,
+        _: &DisplayHandle,
+        _: &mut wayland_server::DataInit<'_, Self>,
+    ) {
+        let entity = *entity;
+        if !state.world.contains(entity) {
+            return;
+        }
+        match request {
+            s_viewport::Request::SetSource {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                if let Ok(mut v) = state.world.get::<&mut XwlViewport>(entity) {
+                    v.source = (width > 0.0).then_some([x, y, width, height]);
+                }
+            }
+            s_viewport::Request::SetDestination { width, height } => {
+                if let Ok(mut v) = state.world.get::<&mut XwlViewport>(entity) {
+                    v.destination = (width > 0).then_some((width, height));
+                }
+            }
+            s_viewport::Request::Destroy => {
+                if state.world.remove_one::<XwlViewport>(entity).is_ok() {
+                    if let Ok(viewport) = state.world.get::<&WpViewport>(entity) {
+                        viewport.set_source(-1.0, -1.0, -1.0, -1.0);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        debug!(
+            "xwayland viewport on {entity:?}: {:?}",
+            state.world.get::<&XwlViewport>(entity).as_deref()
+        );
+        // a surface not yet associated with its window has no WindowData
+        if state.world.satisfies::<(&WindowData, &WpViewport)>(entity) == Ok(true) {
+            update_surface_viewport(&state.world, state.world.query_one(entity).unwrap());
         }
     }
 }
