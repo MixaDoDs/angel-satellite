@@ -52,7 +52,7 @@ use wayland_protocols::{
         },
         tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2,
         viewporter::{
-            client::wp_viewporter::WpViewporter,
+            client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
             server::wp_viewporter::WpViewporter as WpViewporterServer,
         },
     },
@@ -141,6 +141,8 @@ struct WindowData {
     emu_rects: Vec<[i32; 4]>,
     /// The size the compositor last asked for, before `emulated_size` took over.
     wl_size: Option<(u16, u16)>,
+    /// angel-satellite: `_ANGEL_SATELLITE_STRETCH` (width, height), see `crop`.
+    stretch: Option<(u16, u16)>,
 }
 
 impl WindowData {
@@ -153,6 +155,18 @@ impl WindowData {
             .iter()
             .find(|r| r[0] == self.output_offset.x && r[1] == self.output_offset.y)
             .map(|r| (r[2] as u16, r[3] as u16))
+    }
+
+    /// angel-satellite: a borderless fullscreen game that renders a smaller picture into the
+    /// top-left corner of its monitor-sized window (CS2 at 4:3, which never tells X its size)
+    /// gets that corner stretched to the whole window. The size comes from
+    /// `_ANGEL_SATELLITE_STRETCH`, set by whoever knows the game's resolution. Pointer
+    /// coordinates are scaled back by the same factor (`crop_scale`).
+    fn crop(&self, fullscreen: bool) -> Option<(u16, u16)> {
+        let (w, h) = self.stretch?;
+        let dims = &self.attrs.dims;
+        (fullscreen && w > 0 && h > 0 && (w, h) != (dims.width, dims.height))
+            .then_some((w.min(dims.width), h.min(dims.height)))
     }
 
     fn new(override_redirect: bool, dims: WindowDims, activation_token: Option<String>) -> Self {
@@ -168,6 +182,7 @@ impl WindowData {
             activation_token,
             emu_rects: Vec::new(),
             wl_size: None,
+            stretch: None,
         }
     }
 
@@ -1099,6 +1114,26 @@ impl<S: X11Selection + 'static> InnerServerState<S> {
             )
             .unwrap();
         update_surface_viewport(&self.world, self.world.query_one(entity).unwrap());
+    }
+
+    /// angel-satellite: see `WindowData::crop`.
+    pub fn set_stretch(&mut self, window: x::Window, stretch: Option<(u16, u16)>) {
+        let Some(entity) = self.windows.get(&window).copied() else {
+            debug!("not setting stretch for unknown window {window:?}");
+            return;
+        };
+        let Ok(mut win) = self.world.get::<&mut WindowData>(entity) else {
+            return;
+        };
+        if win.stretch == stretch {
+            return;
+        }
+        debug!("{window:?} stretch: {stretch:?}");
+        win.stretch = stretch;
+        drop(win);
+        if self.world.satisfies::<(&WindowData, &WpViewport)>(entity) == Ok(true) {
+            update_surface_viewport(&self.world, self.world.query_one(entity).unwrap());
+        }
     }
 
     pub fn set_win_decorations(&mut self, window: x::Window, decorations: Decorations) {

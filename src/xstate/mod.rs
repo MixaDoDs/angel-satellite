@@ -682,6 +682,7 @@ impl XState {
         if let Some(rects) = self.get_emu_rects(window)? {
             server_state.set_emu_rects(window, rects);
         }
+        server_state.set_stretch(window, self.get_stretch(window)?);
 
         let transient_for = self.get_transient_for(window)?;
         let override_redirect = self.get_override_redirect(window)?;
@@ -806,6 +807,20 @@ impl XState {
         PropertyCookieWrapper::new(&self.connection, cookie).resolve(resolver)
     }
 
+    /// angel-satellite: the picture size a borderless game draws in its window's corner
+    /// (width, height), see `WindowData::crop`.
+    fn get_stretch(&self, window: x::Window) -> XResult<Option<(u16, u16)>> {
+        let cookie =
+            self.get_property_cookie(window, self.atoms.angel_stretch, x::ATOM_CARDINAL, 2);
+        let resolver = |reply: x::GetPropertyReply| match reply.value::<u32>() {
+            [w, h] => Some((*w as u16, *h as u16)),
+            _ => None,
+        };
+        PropertyCookieWrapper::new(&self.connection, cookie)
+            .resolve(resolver)
+            .map(Option::flatten)
+    }
+
     fn get_wm_size_hints(&self, window: x::Window) -> XResult<Option<WmNormalHints>> {
         let cookie =
             self.get_property_cookie(window, x::ATOM_WM_NORMAL_HINTS, x::ATOM_WM_SIZE_HINTS, 9);
@@ -881,6 +896,15 @@ impl XState {
         server_state: &mut super::RealServerState,
     ) {
         if self.handle_selection_property_change(&event) {
+            return;
+        }
+        if event.atom() == self.atoms.angel_stretch {
+            let stretch = if event.state() == x::Property::Delete {
+                None
+            } else {
+                unwrap_or_skip_bad_window_ret!(self.get_stretch(event.window()))
+            };
+            server_state.set_stretch(event.window(), stretch);
             return;
         }
         // angel-satellite: Xwayland deletes it when the game puts the resolution back
@@ -985,6 +1009,7 @@ xcb::atoms_struct! {
         primary_targets => b"_primary_targets" only_if_exists = false,
         moveresize => b"_NET_WM_MOVERESIZE" only_if_exists = false,
         xwayland_emu_rects => b"_XWAYLAND_RANDR_EMU_MONITOR_RECTS" only_if_exists = false,
+        angel_stretch => b"_ANGEL_SATELLITE_STRETCH" only_if_exists = false,
         xdnd_aware => b"XdndAware" only_if_exists = false,
         xdnd_proxy => b"XdndProxy" only_if_exists = false,
         xdnd_selection => b"XdndSelection" only_if_exists = false,
