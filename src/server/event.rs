@@ -524,25 +524,6 @@ pub(super) struct XwlViewport {
     pub destination: Option<(i32, i32)>,
 }
 
-/// angel-satellite: the factor turning surface coordinates into the window's while
-/// `WindowData::crop` stretches its corner.
-fn crop_scale(world: &World, surface: Entity) -> (f64, f64) {
-    let Ok(mut query) = world.query_one::<(&WindowData, Option<&SurfaceRole>)>(surface) else {
-        return (1.0, 1.0);
-    };
-    let Some((data, role)) = query.get() else {
-        return (1.0, 1.0);
-    };
-    let fullscreen = matches!(role, Some(SurfaceRole::Toplevel(Some(t))) if t.fullscreen);
-    match data.crop(fullscreen) {
-        Some((w, h)) => (
-            w as f64 / data.attrs.dims.width as f64,
-            h as f64 / data.attrs.dims.height as f64,
-        ),
-        None => (1.0, 1.0),
-    }
-}
-
 pub(super) fn update_surface_viewport(
     world: &World,
     mut surface_query: hecs::QueryOne<(
@@ -756,7 +737,7 @@ impl Event for client::wl_pointer::Event {
                     Some((Some([_, _, sw, sh]), Some((dw, dh)))) => {
                         (sw / dw as f64, sh / dh as f64)
                     }
-                    _ => surface_entity.map_or((1.0, 1.0), |e| crop_scale(&state.world, e)),
+                    _ => (1.0, 1.0),
                 };
                 let surface_is_popup = matches!(role, SurfaceRole::Popup(_));
                 let mut do_enter = || {
@@ -846,15 +827,11 @@ impl Event for client::wl_pointer::Event {
                         return;
                     }
                 }
-                let (crop_x, crop_y) = match state.world.get::<&CurrentSurface>(target).as_deref() {
-                    Ok(CurrentSurface::Xwayland(e)) => crop_scale(&state.world, *e),
-                    _ => (1.0, 1.0),
-                };
                 let (server, scale) = state
                     .world
                     .query_one_mut::<(&WlPointer, &SurfaceScaleFactor)>(target)
                     .unwrap();
-                let (x, y) = (surface_x * scale.0 * crop_x, surface_y * scale.0 * crop_y);
+                let (x, y) = (surface_x * scale.0, surface_y * scale.0);
                 trace!(target: "pointer_position", "pointer motion {x} {y}");
                 server.motion(time, x, y);
             }

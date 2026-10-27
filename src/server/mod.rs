@@ -160,8 +160,8 @@ impl WindowData {
     /// angel-satellite: a borderless fullscreen game that renders a smaller picture into the
     /// top-left corner of its monitor-sized window (CS2 at 4:3, which never tells X its size)
     /// gets that corner stretched to the whole window. The size comes from
-    /// `_ANGEL_SATELLITE_STRETCH`, set by whoever knows the game's resolution. Pointer
-    /// coordinates are scaled back by the same factor (`crop_scale`).
+    /// `_ANGEL_SATELLITE_STRETCH`, set by whoever knows the game's resolution. The pointer is
+    /// left alone: the game maps window coordinates to its picture itself.
     fn crop(&self, fullscreen: bool) -> Option<(u16, u16)> {
         let (w, h) = self.stretch?;
         let dims = &self.attrs.dims;
